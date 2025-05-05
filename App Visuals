@@ -1,0 +1,158 @@
+ 
+  ######### Cohort WAR Plot
+  
+  output$knn_plot <- renderPlot({
+    
+    ggplot(playerselect_cohort, aes(x = YearCounter, y = WAR)) +
+      annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0, fill = "lightblue", alpha = 0.5) +
+      annotate("rect", xmin = -Inf, xmax = Inf, ymin = 3.5, ymax = Inf, fill = "lightcoral", alpha = 0.5) +
+      geom_point(alpha = 0.075, color = "gray1") +
+      geom_smooth(method = "loess", se = FALSE, color = "gray1") +
+      geom_line(data = playerselect_knn, aes(x = YearCounter, y = SmoothedWAR_Above), color = "lightgray", size = 0.5) +
+      geom_line(data = playerselect_knn, aes(x = YearCounter, y = SmoothedWAR_Below), color = "lightgray", size = 0.5) +
+      geom_point(data = playerselect_knn, aes(x = YearCounter, y = SmoothedWAR), color = "gray1", size = 2) +
+      geom_text(data = playerselect_knn, aes(x = YearCounter, y = SmoothedWAR, label = round(SmoothedWAR, 1)),
+                vjust = -0.8, hjust = 0.5, size = 5, color = "gray1") +
+      scale_x_continuous(breaks = seq(1, 8, by = 1), limits = c(1, 8)) +
+      scale_y_continuous(breaks = seq(min(playerselect_cohort$WAR, na.rm=TRUE), 
+                                      max(playerselect_cohort$WAR, na.rm=TRUE), by = 1),
+                         labels = scales::label_number(accuracy = 1)) +
+      labs(title = "8-Year Cohort WAR Distribution", x = "# Years", y = "WAR") +
+      theme_dark(base_size = 14) +
+      theme_minimal() +
+      theme(
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        axis.text.x = element_text(size = 14),
+        axis.text.y = element_text(size = 14),
+        plot.title = element_text(size = 16, hjust = 0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, size = 1)
+      )
+  })
+  
+  ######### Average WAR Projection Table
+  
+  output$projection_avg <- render_gt({
+    transposed_pfr %>%
+      gt() %>%
+      tab_header(title = "Average 8-Year WAR Projection") %>%
+      tab_style(
+        style = list(
+          cell_text(size = px(16))  # Set title size
+        ),
+        locations = cells_title(groups = "title")
+      ) %>%
+      cols_label(Metric = "Age") %>%
+      fmt_number(rows = 1, decimals = 1) %>%
+      tab_options(
+        table.font.size = px(12),
+        table.font.names = "Arial",
+        table.border.top.style = "none"
+      )
+  })
+  
+  ######### Financials Table
+  
+  output$financials <- render_gt({
+    playerselect_fin_ref %>%
+      gt() %>%
+      tab_header(
+        title = "Financial Projections"
+      ) %>%
+      tab_spanner(
+        label = "Model",                          
+        columns = 4:7                          
+      ) %>%
+      tab_spanner(
+        label = "Cohort",               
+        columns = 8:11                          
+      ) %>%
+      tab_spanner(
+        label = "Average",                    
+        columns = 12:15                            
+      ) %>%
+      fmt(
+        columns = Year,     
+        fns = function(x) as.character(x)  
+      ) %>%
+      fmt_currency(
+        columns = c(mVal, mVal_Acc, mAvg_AAV,
+                    cVal, cVal_Acc, cAvg_AAV, aVal, aVal_Acc, aAvg_AAV), 
+        decimals = 1
+      ) %>%
+      fmt_number(
+        columns = c(mWAR, cWAR, aWAR), decimals = 1
+      ) %>%
+      cols_label(
+        Year = "Season",
+        Row_Number = "Years",
+        mWAR = "WAR",
+        mVal = "Salary",
+        mVal_Acc = "Total",
+        mAvg_AAV = "AAV",
+        cWAR = "WAR",
+        cVal = "Salary",
+        cVal_Acc = "Total",
+        cAvg_AAV = "AAV",
+        aWAR = "WAR",
+        aVal = "Salary",
+        aVal_Acc = "Total",
+        aAvg_AAV = "AAV"
+      ) %>%
+      data_color(
+        columns = c("mWAR", "cWAR", "aWAR"),
+        colors = function(x) {
+          pal <- scales::col_numeric(
+            palette = c("darkred", "white", "skyblue"),
+            domain  = c(-2, 3.5)
+          )
+          x2 <- pmin(pmax(x, -2), 3.5)
+          pal(x2)
+        }
+      ) %>%
+      tab_style(
+        style = cell_borders(
+          sides = "right",
+          color = "lightgray",
+          weight = px(2)
+        ),
+        locations = list(
+          cells_body(columns = 7), 
+          cells_column_spanners(spanners = "Model")  
+        )
+      ) %>%
+      tab_style(
+        style = cell_borders(
+          sides = "right",
+          color = "lightgray",
+          weight = px(2)
+        ),
+        locations = cells_column_labels(columns = 7) 
+      ) %>%
+      tab_style(
+        style = cell_borders(
+          sides = "right",
+          color = "lightgray",
+          weight = px(2)
+        ),
+        locations = list(
+          cells_body(columns = 11),  
+          cells_column_spanners(spanners = "Cohort")  
+        )
+      ) %>%
+      tab_style(
+        style = cell_borders(
+          sides = "right",
+          color = "lightgray",
+          weight = px(2)
+        ),
+        locations = cells_column_labels(columns = 11)  
+      ) %>%
+      tab_options(
+        table.font.size = px(12),
+        table.font.names = "Arial",
+        table.border.top.style = "none"
+      )
+  })
