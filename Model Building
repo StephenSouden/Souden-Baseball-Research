@@ -1,0 +1,380 @@
+### this script outlines all necessary steps that go into building the free agent evaluation app
+
+library(dplyr)
+library(rstanarm)
+library(knitr)
+library(ggplot2)
+library(gt)
+library(tidyr)
+
+sc_off <- read.csv("~/Desktop/Model Analysis/SoudenBR/sc_hitters.csv")
+sc_def <- read.csv("~/Desktop/Model Analysis/SoudenBR/sc_fielding.csv")
+off.hist <- read.csv("~/Desktop/Model Analysis/SoudenBR/off hist.csv")
+def.hist <- read.csv("~/Desktop/Model Analysis/SoudenBR/def hist.csv")
+players_2025 <- read.csv("~/Desktop/Model Analysis/SoudenBR/2025_players.csv")
+fa_hit2000 <- read.csv("~/Desktop/Model Analysis/SoudenBR/fa_hit2000.csv")
+fa_hitters <- read.csv("~/Desktop/Model Analysis/SoudenBR/fa_hitters.csv")
+contracts <- read.csv("~/Desktop/Model Analysis/SoudenBR/contracts.csv")
+
+## playerselect
+ps_name <- "Christian Walker"
+ps_year <- 2025
+ps_age <- weighted_data %>%
+  filter(Name == ps_name & Season == (ps_year - 1)) %>%
+  pull(Age) + 1
+ps_war <- weighted_data %>%
+  filter(Name == ps_name & Season == ps_year) %>%
+  pull(WARw)
+ps_prim <- contracts %>%
+  filter(Name == ps_name & AgeF == ps_age) %>%
+  pull(Pos)
+ps_pg <- case_when(
+  ps_prim == "C" ~ "C",                 
+  ps_prim %in% c("1B", "DH") ~ "1B/DH", 
+  ps_prim %in% c("2B", "SS", "3B") ~ "INF", 
+  ps_prim %in% c("LF", "CF", "RF") ~ "OF",   
+  TRUE ~ NA_character_                  
+)
+
+## past 3 Seasons Performance Chart
+
+# convert format of player name
+sc_off <- sc_off %>%
+  separate(last_name..first_name, into = c("LastName", "FirstName"), sep = ", ") %>%
+  unite(Name, FirstName, LastName, sep = " ")  
+
+# create position map for position grouping
+position_map <- c("outs_2" = "C", "outs_3" = "1B", "outs_4" = "2B", 
+                  "outs_5" = "3B", "outs_6" = "SS", "outs_7" = "LF", 
+                  "outs_8" = "CF", "outs_9" = "RF")
+
+# creating position column based on most outs at given position
+sc_def <- sc_def %>%
+  rowwise() %>%
+  mutate(Pos = position_map[which.max(c_across(outs_2:outs_9))]) %>%
+  ungroup()
+
+# joining all statcast data
+sc_all <- sc_off %>%
+  left_join(sc_def %>% select(player_id, Year, FRV, Pos, outs), 
+            by = c("PlayerId" = "player_id", "Year" = "Year"))
+
+# assigning DH to blank defenders
+sc_all <- sc_all %>%
+  mutate(Pos = ifelse(is.na(Pos), "DH", Pos),
+         FRV = replace_na(FRV, 0))
+
+# pulling only the past 3 seasons for the table
+sc_p3 <- sc_all %>%
+  filter(PA >= 200 &
+           Year >= 2022 & Year <= 2024)
+
+# creating averages for the table visual
+p3_avg <- sc_p3 %>%
+  summarise(across(c(wOBA, xwOBA, OBP, ISO, Barrel., EV50, K., ZCon., BB., Chase., GB., SS., Sprint), mean, na.rm = TRUE)) %>%
+  mutate(FRV = 0) 
+
+# player Select for p3 Data
+# JUMP HERE FOR DATA RERUN
+playerselect_sc <- sc_p3 %>%
+  filter(Name == ps_name)
+
+# row binding the 2 sets for table visual
+playerselect_sc_avg <-
+  bind_rows(playerselect_sc, p3_avg)
+
+# create table data with additional columns
+sc_table <- playerselect_sc_avg %>%
+  select(Year, PA, wOBA, xwOBA, OBP, ISO, Barrel., EV50, 
+         K., ZCon., BB., Chase., GB., SS., FRV, Sprint) %>%
+  rename(`Barrel%` = Barrel., `K%` = K., `ZCon%` = ZCon., `BB%` = BB., 
+         `Chase%` = Chase., `GB%` = GB., `SwSp%` = SS.)
+
+# basically adds a label to the averages row
+sc_table <- sc_table %>%
+  mutate(
+    Year = ifelse(is.na(Year), "League_Avg", as.character(Year)),  
+    PA = ifelse(is.na(PA), "", as.character(PA))           
+  )
+
+
+## statcast percentiles bar chart
+# starting with the statcast data
+sc_24 <- sc_all %>%
+  filter(Year == 2024 & PA >= 200)
+
+# calculate percentiles for variables in the fg_hitters24 table
+sc_24 <- sc_24 %>% 
+  mutate(
+    wOBA_percentile = percent_rank(wOBA) * 100,
+    xwOBA_percentile = percent_rank(xwOBA) * 100,
+    OBP_percentile = percent_rank(OBP) * 100,
+    ISO_percentile = percent_rank(ISO) * 100,
+    Barrel_percentile = percent_rank(Barrel.) * 100,
+    EV50_percentile = percent_rank(EV50) * 100,
+    K_percentile = 100 - percent_rank(K.) * 100,  
+    ZCon_percentile = percent_rank(ZCon.) * 100,
+    BB_percentile = percent_rank(BB.) * 100,
+    Chase_percentile = 100 - percent_rank(Chase.) * 100,  
+    GB_percentile = 100 - percent_rank(GB.) * 100,      
+    SS_percentile = percent_rank(SS.) * 100,
+    FRV_percentile = percent_rank(FRV) * 100,
+    Sprint_percentile = percent_rank(Sprint) * 100
+  )
+
+# apply playerselect
+playerselect_sc24 <- sc_24 %>%
+  filter(Name == ps_name)
+
+# reshape the data into a long format for plotting
+playerselect_sc24_long <- playerselect_sc24 %>%
+  select(wOBA, xwOBA, OBP, ISO, Barrel., EV50, K., ZCon., BB., Chase., GB., SS., FRV, Sprint,
+         wOBA_percentile, xwOBA_percentile, OBP_percentile, ISO_percentile, Barrel_percentile,
+         EV50_percentile, K_percentile, ZCon_percentile, BB_percentile, Chase_percentile, 
+         GB_percentile, SS_percentile, FRV_percentile, Sprint_percentile) %>%
+  pivot_longer(
+    cols = everything(),            
+    names_to = "Metric",       
+    values_to = "Value"             
+  )
+
+# filter the data to only include percentiles
+playerselect_sc24_percentiles <- playerselect_sc24_long %>%
+  filter(grepl("_percentile$", Metric))  
+
+# build layout for plotting
+playerselect_sc24_percentiles <- playerselect_sc24_percentiles %>%
+  mutate(Metric = case_when(
+    Metric == "wOBA_percentile" ~ "wOBA",
+    Metric == "xwOBA_percentile" ~ "xwOBA",
+    Metric == "OBP_percentile" ~ "OBP",
+    Metric == "ISO_percentile" ~ "ISO",
+    Metric == "Barrel_percentile" ~ "Barrel%",
+    Metric == "EV50_percentile" ~ "EV50",
+    Metric == "K_percentile" ~ "K%",
+    Metric == "ZCon_percentile" ~ "ZCon%",
+    Metric == "BB_percentile" ~ "BB%",
+    Metric == "Chase_percentile" ~ "Chase%",
+    Metric == "GB_percentile" ~ "GB%",
+    Metric == "SS_percentile" ~ "SS%",
+    Metric == "FRV_percentile" ~ "FRV",
+    Metric == "Sprint_percentile" ~ "Sprint",
+    TRUE ~ Metric  # Keep other metrics unchanged
+  ))
+
+
+## WAR model
+
+# initial historical player performance tables (fangraphs)
+
+# summing inn for each playerid, season, and position
+def_aggregated <- def.hist %>%
+  group_by(PlayerId, Season, Pos) %>%
+  summarise(Inn = sum(Inn, na.rm = TRUE)) %>%
+  ungroup()
+
+# identifying primary (prim) and secondary (sec) positions
+def.group <- def_aggregated %>%
+  group_by(PlayerId, Season) %>%
+  arrange(PlayerId, Season, desc(Inn)) %>%     
+  mutate(Prim = first(Pos),                    
+         Sec = nth(Pos, 2, default = NA)) %>%  
+  select(PlayerId, Season, Prim, Sec) %>%     
+  distinct()                                
+
+# grouping everything into one
+total.hist <- left_join(off.hist, def.group, by = c("PlayerId", "Season"))
+
+# ohtani/pitcher adjustment
+total.hist <- total.hist %>%
+  mutate(Prim = ifelse(is.na(Prim), "DH", Prim),
+         Prim = ifelse(Name == "Shohei Ohtani" & Prim == "P","DH",Prim))
+
+# fangraphs 2024 players, brought in to convert to testing group for 2025 season
+
+# filter down for joining
+players_2025 <- players_2025 %>%
+  select(Name, PlayerId, Season)
+
+# bind it with total data
+full_data <- bind_rows(total.hist, players_2025)
+
+# adding in weighted variables for modeling. 50%/33%/17% weighting for previous three seasons
+weighted_data <- full_data %>%
+  group_by(PlayerId) %>%
+  arrange(PlayerId, Season) %>%
+  mutate(
+    n_years = cumsum(!is.na(lag(WAR))),
+    PAw = case_when(
+      n_years == 1 ~ lag(PA, 1) * 1.0,
+      n_years == 2 ~ lag(PA, 1) * 0.6 + lag(PA, 2) * 0.4,
+      n_years >= 3 ~ lag(PA, 1) * 0.5 + lag(PA, 2) * 0.333 + lag(PA, 3) * 0.167,
+      TRUE ~ NA_real_
+    ),
+    Offw = case_when(
+      n_years == 1 ~ lag(Off, 1) * 1.0,
+      n_years == 2 ~ lag(Off, 1) * 0.6 + lag(Off, 2) * 0.4,
+      n_years >= 3 ~ lag(Off, 1) * 0.5 + lag(Off, 2) * 0.333 + lag(Off, 3) * 0.167,
+      TRUE ~ NA_real_
+    ),
+    Defw = case_when(
+      n_years == 1 ~ lag(Def, 1) * 1.0,
+      n_years == 2 ~ lag(Def, 1) * 0.6 + lag(Def, 2) * 0.4,
+      n_years >= 3 ~ lag(Def, 1) * 0.5 + lag(Def, 2) * 0.333 + lag(Def, 3) * 0.167,
+      TRUE ~ NA_real_
+    ),
+    BsRw = case_when(
+      n_years == 1 ~ lag(BsR, 1) * 1.0,
+      n_years == 2 ~ lag(BsR, 1) * 0.6 + lag(BsR, 2) * 0.4,
+      n_years >= 3 ~ lag(BsR, 1) * 0.5 + lag(BsR, 2) * 0.333 + lag(BsR, 3) * 0.167,
+      TRUE ~ NA_real_
+    ),
+    WARw = case_when(
+      n_years == 1 ~ lag(WAR, 1) * 1.0,
+      n_years == 2 ~ lag(WAR, 1) * 0.6 + lag(WAR, 2) * 0.4,
+      n_years >= 3 ~ lag(WAR, 1) * 0.5 + lag(WAR, 2) * 0.333 + lag(WAR, 3) * 0.167,
+      TRUE ~ NA_real_
+    ),
+    TotOffw = Offw + BsRw) %>%
+  ungroup()
+
+# for dataset rearranging
+weighted_columns <- colnames(weighted_data)[grepl("w$", colnames(weighted_data))]
+columns_to_keep <- c("Name", "Season", "n_years", "WAR", weighted_columns)
+
+# forming training set for model
+training.off <- weighted_data %>%
+  filter(n_years >= 3 &
+           PAw >= 200) %>% # Keep years 2015–2024
+  select(all_of(columns_to_keep)) %>%        # Keep only specified columns
+  drop_na()  
+
+# fit the bayesian linear model
+bayesian_model <- stan_glm(WAR ~ PAw + Offw + Defw + BsRw,  
+                           data = training.off,                  
+                           prior = normal(10,5),               
+                           #   prior_intercept = normal(0, 10),       
+                           seed = 42)                       
+
+# summary of the fitted model
+summary(bayesian_model)
+
+# filter rows for the 2024 season and extract playerid and age for 2025 evaluation
+age_2024 <- total.hist %>%
+  filter(Season == 2024) %>%
+  select(PlayerId, Age)
+
+# process the testing data
+testing_data <- weighted_data %>%
+  filter(Season != 2025) %>%                            
+  drop_na(-Sec) %>%                                     
+  bind_rows(                                            
+    weighted_data %>%
+      filter(Season == 2025) %>%                  
+      left_join(age_2024, by = "PlayerId") %>%        
+      mutate(Age = Age.y + 1) %>%                     
+      select(-Age.y)                           
+  )
+
+# select relevant columns
+testing_data <- testing_data %>%
+  select(ends_with("w"), PlayerId, Name, Age, Season) 
+
+
+# predict 2025 WAR with uncertainty
+predictions <- posterior_predict(bayesian_model, newdata = testing_data)
+
+# add the mean predicted WAR and 90%/10% credible intervals to your data
+testing_data <- testing_data %>%
+  mutate(Predicted_WAR = (apply(predictions, 2, mean))*1.2,              
+         Credible_Lower = (apply(predictions, 2, quantile, probs = .1))*1.2, 
+         Credible_Upper = (apply(predictions, 2, quantile, probs = .9))*1.2)  
+
+# separate research done to determine YoY changes for player WAR by Age
+age.adjustments <- data_frame(Age = c(22:40),
+                              Adjustment = c(1.25,1.17,.87,.57,.3,.08,-.09,-.17,
+                                             -.21,-.37,-.39,-.49,-.56,-.58,-.6,
+                                             -.68,-.73,-.78,-.83))
+
+# apply the adjustment in testing_data. 8 year evaluation
+testing_data <- testing_data %>%
+  mutate(WAR25 = Predicted_WAR + age.adjustments$Adjustment[match(Age, age.adjustments$Age)],
+         WAR26 = WAR25 + age.adjustments$Adjustment[match(Age+1, age.adjustments$Age)],
+         WAR27 = WAR26 + age.adjustments$Adjustment[match(Age+2, age.adjustments$Age)],
+         WAR28 = WAR27 + age.adjustments$Adjustment[match(Age+3, age.adjustments$Age)],
+         WAR29 = WAR28 + age.adjustments$Adjustment[match(Age+4, age.adjustments$Age)],
+         WAR30 = WAR29 + age.adjustments$Adjustment[match(Age+5, age.adjustments$Age)],
+         WAR31 = WAR30 + age.adjustments$Adjustment[match(Age+6, age.adjustments$Age)],
+         WAR32 = WAR31 + age.adjustments$Adjustment[match(Age+7, age.adjustments$Age)],
+         uWAR25 = Credible_Upper + age.adjustments$Adjustment[match(Age, age.adjustments$Age)], 
+         uWAR26 = uWAR25 + age.adjustments$Adjustment[match(Age+1, age.adjustments$Age)],
+         uWAR27 = uWAR26 + age.adjustments$Adjustment[match(Age+2, age.adjustments$Age)],
+         uWAR28 = uWAR27 + age.adjustments$Adjustment[match(Age+3, age.adjustments$Age)],
+         uWAR29 = uWAR28 + age.adjustments$Adjustment[match(Age+4, age.adjustments$Age)],
+         uWAR30 = uWAR29 + age.adjustments$Adjustment[match(Age+5, age.adjustments$Age)],
+         uWAR31 = uWAR30 + age.adjustments$Adjustment[match(Age+6, age.adjustments$Age)],
+         uWAR32 = uWAR31 + age.adjustments$Adjustment[match(Age+7, age.adjustments$Age)],
+         lWAR25 = Credible_Lower + age.adjustments$Adjustment[match(Age, age.adjustments$Age)],
+         lWAR26 = lWAR25 + age.adjustments$Adjustment[match(Age+1, age.adjustments$Age)],
+         lWAR27 = lWAR26 + age.adjustments$Adjustment[match(Age+2, age.adjustments$Age)],
+         lWAR28 = lWAR27 + age.adjustments$Adjustment[match(Age+3, age.adjustments$Age)],
+         lWAR29 = lWAR28 + age.adjustments$Adjustment[match(Age+4, age.adjustments$Age)],
+         lWAR30 = lWAR29 + age.adjustments$Adjustment[match(Age+5, age.adjustments$Age)],
+         lWAR31 = lWAR30 + age.adjustments$Adjustment[match(Age+6, age.adjustments$Age)],
+         lWAR32 = lWAR31 + age.adjustments$Adjustment[match(Age+7, age.adjustments$Age)])
+
+# player select for plotting
+player.war <- combined_war %>%
+  filter(Name == ps_name)
+
+## cohort model
+# build from fangraphs weighted data
+playerselect_cohort_age <- weighted_data %>%
+  filter(
+    Prim == ps_prim &
+      between(WARw, ps_war-1, ps_war+1) &
+      between(Age, ps_age-1, ps_age+1)
+  ) %>%
+  group_by(PlayerId) %>%                 
+  summarize(MinAge = as.integer(min(Age, .groups = "drop")))
+
+# join back to weighted to grab the WARw (for above/below splitting)
+playerselect_cohort_war <- playerselect_cohort_age %>%
+  left_join(weighted_data, by = c("PlayerId", "MinAge"="Age")) %>%
+  select(PlayerId, MinAge, WARw)
+
+# extract WARs starting at MinAge and all subsequent ages
+playerselect_cohort <- weighted_data %>%
+  filter(PlayerId %in% playerselect_cohort_war$PlayerId) %>%              
+  inner_join(playerselect_cohort_war, by = "PlayerId") %>%                 
+  filter(Age >= MinAge) %>%                                
+  arrange(PlayerId, Age) %>%                             
+  group_by(PlayerId) %>%                                
+  mutate(YearCounter = row_number()) %>%                 
+  ungroup() %>%                                          
+  select(PlayerId, Age, WARw.y, WAR, YearCounter) 
+
+# add a column for above/below cohort
+playerselect_cohort <- playerselect_cohort %>%
+  mutate(Group = ifelse(WARw.y >= ps_war, "Above", "Below"))
+
+# create separate smoothing models for each group
+smooth_curve_above <- loess(WAR ~ YearCounter, data = playerselect_cohort %>% filter(Group == "Above"))
+smooth_curve_below <- loess(WAR ~ YearCounter, data = playerselect_cohort %>% filter(Group == "Below"))
+
+# predict smoothed values for "Above" group
+smoothed_above <- playerselect_cohort %>%
+  filter(Group == "Above") %>%
+  group_by(YearCounter) %>%
+  summarize(SmoothedWAR_Above = predict(smooth_curve_above, newdata = list(YearCounter = YearCounter[1])), .groups = "drop")
+
+# predict smoothed values for "Below" group
+smoothed_below <- playerselect_cohort %>%
+  filter(Group == "Below") %>%
+  group_by(YearCounter) %>%
+  summarize(SmoothedWAR_Below = predict(smooth_curve_below, newdata = list(YearCounter = YearCounter[1])), .groups = "drop")
+
+# combine the two smoothed groups and calculate the average of the smoothed values
+playerselect_knn <- smoothed_above %>%
+  full_join(smoothed_below, by = "YearCounter") %>%
+  mutate(SmoothedWAR = rowMeans(cbind(SmoothedWAR_Above, SmoothedWAR_Below), na.rm = TRUE))
